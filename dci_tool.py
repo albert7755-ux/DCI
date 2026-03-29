@@ -8,15 +8,13 @@ from datetime import datetime
 # --- 1. 基礎設定 ---
 st.set_page_config(page_title="雙元貨幣 (DCI) 戰情室", layout="wide")
 st.title("💱 雙元貨幣 (DCI) 歷史勝率與情境回測")
-st.markdown("針對外匯 DCI 設計的專屬回測模組。支援直覺輸入貨幣對，並自動比較多重履約價勝率。")
+st.markdown("回測區間：**2010/01/01 至今**。支援直覺輸入貨幣對，自動比較多重履約價勝率與解套時間。")
 st.divider()
 
 # --- 2. 側邊欄：參數設定 ---
 st.sidebar.header("1️⃣ 貨幣對設定")
-# [關鍵更新] 改為直覺的文字輸入框
 fx_input = st.sidebar.text_input("輸入外匯標的 (例如: USD/JPY, EUR/USD, USD/TWD)", value="USD/JPY")
 
-# 自動轉換邏輯：轉大寫 -> 去除斜線與空白 -> 加上 =X
 clean_fx = fx_input.upper().replace("/", "").replace(" ", "")
 ticker = f"{clean_fx}=X"
 st.sidebar.caption(f"🔍 系統底層對應 yFinance 代碼: `{ticker}`")
@@ -105,7 +103,7 @@ def run_dci_backtest(df, target_strike_pct, t_days):
 if run_btn:
     st.markdown(f"### 📌 標的：{fx_input.upper()}")
     
-    with st.spinner("抓取歷史匯率並計算中..."):
+    with st.spinner("抓取 2010 年至今歷史匯率並計算中..."):
         df, err = get_fx_data(ticker)
         
     if err:
@@ -139,7 +137,8 @@ if run_btn:
                 fig_spot = go.Figure()
                 fig_spot.add_trace(go.Scatter(x=plot_df['Date'], y=plot_df['Close'], name="匯率走勢", line=dict(color="#2980b9")))
                 fig_spot.add_hline(y=current_strike, line_dash="dash", line_color="red", annotation_text=f"本期履約價 {current_strike:.4f}")
-                fig_spot.update_layout(title=f"{fx_input.upper()} 近兩年走勢與履約價位置", height=350, margin=dict(l=0, r=20, t=40, b=0))
+                # 標題明確告知圖表只顯示近兩年，但勝率是 2010 至今
+                fig_spot.update_layout(title=f"{fx_input.upper()} 走勢 (圖表擷取近兩年便於觀察履約距離)", height=350, margin=dict(l=0, r=20, t=40, b=0))
                 st.plotly_chart(fig_spot, use_container_width=True)
                 
             with col_chart2:
@@ -149,11 +148,21 @@ if run_btn:
                     hole=.4,
                     marker_colors=['#2ecc71', '#e74c3c']
                 )])
-                fig_pie.update_layout(title=f"{strike_pct}% 勝率分佈", height=350, margin=dict(l=0, r=0, t=40, b=0))
+                fig_pie.update_layout(title=f"自 2010 至今勝率分佈", height=350, margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig_pie, use_container_width=True)
             
-            # --- [關鍵更新] 多重履約價戰情表 ---
-            st.markdown("### 📊 不同履約價情境比較表")
+            # --- [重新加回] AI 解讀與銷售話術 ---
+            st.info(f"""
+            **💡 教育訓練 / 銷售話術 (Sales Talk)：**
+            我們採用了 **自 2010 年以來的真實每日外匯數據** 進行超過 {stats['total']} 次的情境回測。
+            如果您承作 **{tenor_label}** 的 DCI，並將履約價設定在期初匯率的 **{strike_pct}%**：
+            1. **高防禦力**：歷史勝率高達 **{stats['win_rate']:.1f}%**，能安穩拿回本金與高息。
+            2. **解套時間短**：就算不幸遇到極端行情被轉換（機率 {(100 - stats['win_rate']):.1f}%），根據歷史經驗，平均只要等待 **{stats['avg_recovery_days']:.0f} 天**，匯率就能重新站回您的履約成本價，解套機率極高。
+            *(註：在極少數被轉換的極端案例中，約有 {stuck_ratio:.1f}% 因長期趨勢反轉，截至目前尚未解套)*
+            """)
+
+            # --- 多重履約價戰情表 ---
+            st.markdown("### 📊 不同履約價情境比較表 (數據基準：2010 至今)")
             st.caption(f"針對 **{tenor_label}** 天期，為您試算不同防守深度的歷史數據：")
             
             compare_strikes = [99.5, 99.0, 98.5, 98.0, 95.0]
