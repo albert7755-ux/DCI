@@ -8,7 +8,7 @@ from datetime import datetime
 # --- 1. 基礎設定 ---
 st.set_page_config(page_title="雙元貨幣 (DCI) 戰情室", layout="wide")
 st.title("💱 雙元貨幣 (DCI) 歷史勝率與情境回測")
-st.markdown("回測區間：**2010/01/01 至今**。支援直覺輸入貨幣對，並獨家計算「**被轉換後立刻對作**」的解套勝率。")
+st.markdown("回測區間：**2010/01/01 至今**。支援直覺輸入貨幣對，自動比較多重履約價勝率與解套時間。")
 st.divider()
 
 # --- 2. 側邊欄：參數設定 ---
@@ -57,18 +57,12 @@ def run_dci_backtest(df, target_strike_pct, t_days):
     bt = df[['Date', 'Close']].copy()
     bt.columns = ['Start_Date', 'Start_Price']
     
-    # 本期期末
     bt['End_Date'] = bt['Start_Date'].shift(-t_days)
     bt['Final_Price'] = bt['Start_Price'].shift(-t_days)
-    
-    # [關鍵新增] 下一期的期末 (用來計算連續對作)
-    bt['Next_Final_Price'] = bt['Start_Price'].shift(-2 * t_days)
-    
-    bt = bt.dropna(subset=['End_Date', 'Final_Price'])
+    bt = bt.dropna()
     
     if bt.empty: return None, None
     
-    # 判斷本期是否被轉換
     bt['Strike_Price'] = bt['Start_Price'] * (target_strike_pct / 100)
     bt['Converted'] = bt['Final_Price'] < bt['Strike_Price']
     
@@ -77,7 +71,7 @@ def run_dci_backtest(df, target_strike_pct, t_days):
     safe_count = total_trades - converted_count
     win_rate = (safe_count / total_trades) * 100
     
-    # --- 1. 計算解套天數 ---
+    # 計算解套時間
     loss_indices = bt[bt['Converted'] == True].index
     recovery_counts = []
     stuck_count = 0
@@ -96,34 +90,13 @@ def run_dci_backtest(df, target_strike_pct, t_days):
 
     avg_recovery = np.mean(recovery_counts) if recovery_counts else 0
     
-    # --- 2. 計算「連續對作」勝率 ---
-    # 篩選出被轉換，且下一期還有歷史數據的樣本
-    valid_next_bt = bt[bt['Converted'] & bt['Next_Final_Price'].notna()].copy()
-    valid_converted_count = len(valid_next_bt)
-    
-    if valid_converted_count > 0:
-        # A. 原價解套 (下一期匯率 >= 原本的履約價)
-        orig_recovery_count = (valid_next_bt['Next_Final_Price'] >= valid_next_bt['Strike_Price']).sum()
-        reverse_orig_rate = (orig_recovery_count / valid_converted_count) * 100
-        
-        # B. 市價對稱對作 (例如原本設定跌 1.5%，現在依新市價設定漲 1.5% 換回)
-        reverse_pct = 200 - target_strike_pct
-        valid_next_bt['Symmetric_Strike'] = valid_next_bt['Final_Price'] * (reverse_pct / 100)
-        symm_recovery_count = (valid_next_bt['Next_Final_Price'] >= valid_next_bt['Symmetric_Strike']).sum()
-        reverse_symm_rate = (symm_recovery_count / valid_converted_count) * 100
-    else:
-        reverse_orig_rate = 0
-        reverse_symm_rate = 0
-    
     return bt, {
         'total': total_trades,
         'safe': safe_count,
         'converted': converted_count,
         'win_rate': win_rate,
         'avg_recovery_days': avg_recovery,
-        'stuck_count': stuck_count,
-        'reverse_orig_rate': reverse_orig_rate,
-        'reverse_symm_rate': reverse_symm_rate
+        'stuck_count': stuck_count
     }
 
 # --- 4. 執行與畫面呈現 ---
@@ -164,6 +137,7 @@ if run_btn:
                 fig_spot = go.Figure()
                 fig_spot.add_trace(go.Scatter(x=plot_df['Date'], y=plot_df['Close'], name="匯率走勢", line=dict(color="#2980b9")))
                 fig_spot.add_hline(y=current_strike, line_dash="dash", line_color="red", annotation_text=f"本期履約價 {current_strike:.4f}")
+                # 標題明確告知圖表只顯示近兩年，但勝率是 2010 至今
                 fig_spot.update_layout(title=f"{fx_input.upper()} 走勢 (圖表擷取近兩年便於觀察履約距離)", height=350, margin=dict(l=0, r=20, t=40, b=0))
                 st.plotly_chart(fig_spot, use_container_width=True)
                 
@@ -177,22 +151,19 @@ if run_btn:
                 fig_pie.update_layout(title=f"自 2010 至今勝率分佈", height=350, margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig_pie, use_container_width=True)
             
-            # --- AI 解讀與銷售話術 ---
+            # --- [重新加回] AI 解讀與銷售話術 ---
             st.info(f"""
-            **💡 破解「被套牢」疑慮的銷售話術 (Sales Talk)：**
-            
-            「很多客戶會問：『如果真的不幸遇到那 {(100 - stats['win_rate']):.1f}% 被換過去了怎麼辦？』」
-            「歷史數據告訴我們，您有兩套解套策略：
-            
-            👉 **策略 1 (順勢收息)**：如果我們依據新的市價，設定對稱的履約價立刻對作，下一期就有高達 **{stats['reverse_symm_rate']:.1f}%** 的機率成功換回原本的幣別，而且還能多賺一期高息！
-            👉 **策略 2 (保本防守)**：如果您堅持掛回『原本的履約價』，就算匯率跌深，歷史上也有 **{stats['reverse_orig_rate']:.1f}%** 的機率能在一期內完全不虧匯差解套。
-            
-            所以 DCI 是一個進可攻、退可守的靈活工具！」
+            **💡 教育訓練 / 銷售話術 (Sales Talk)：**
+            我們採用了 **自 2010 年以來的真實每日外匯數據** 進行超過 {stats['total']} 次的情境回測。
+            如果您承作 **{tenor_label}** 的 DCI，並將履約價設定在期初匯率的 **{strike_pct}%**：
+            1. **高防禦力**：歷史勝率高達 **{stats['win_rate']:.1f}%**，能安穩拿回本金與高息。
+            2. **解套時間短**：就算不幸遇到極端行情被轉換（機率 {(100 - stats['win_rate']):.1f}%），根據歷史經驗，平均只要等待 **{stats['avg_recovery_days']:.0f} 天**，匯率就能重新站回您的履約成本價，解套機率極高。
+            *(註：在極少數被轉換的極端案例中，約有 {stuck_ratio:.1f}% 因長期趨勢反轉，截至目前尚未解套)*
             """)
 
             # --- 多重履約價戰情表 ---
             st.markdown("### 📊 不同履約價情境比較表 (數據基準：2010 至今)")
-            st.caption(f"針對 **{tenor_label}** 天期，為您試算不同防守深度與對作解套機率：")
+            st.caption(f"針對 **{tenor_label}** 天期，為您試算不同防守深度的歷史數據：")
             
             compare_strikes = [99.5, 99.0, 98.5, 98.0, 95.0]
             if strike_pct not in compare_strikes:
@@ -206,10 +177,9 @@ if run_btn:
                     compare_results.append({
                         "履約價設定": f"{s_pct}%",
                         "對應匯率價位": f"{(current_spot * (s_pct/100)):.4f}",
-                        "期初不轉換機率": f"{s_stats['win_rate']:.1f}%",
+                        "歷史勝率 (不轉換)": f"{s_stats['win_rate']:.1f}%",
                         "不幸被換機率": f"{(100 - s_stats['win_rate']):.1f}%",
-                        "下期市價對作換回率": f"{s_stats['reverse_symm_rate']:.1f}%" if s_stats['converted'] > 0 else "-",
-                        "下期掛原價解套率": f"{s_stats['reverse_orig_rate']:.1f}%" if s_stats['converted'] > 0 else "-"
+                        "平均解套天數": f"{s_stats['avg_recovery_days']:.0f} 天" if s_stats['converted'] > 0 else "0 天"
                     })
             
             df_compare = pd.DataFrame(compare_results)
